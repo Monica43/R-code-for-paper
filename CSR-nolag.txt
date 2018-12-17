@@ -1,0 +1,635 @@
+setwd("D:/Paper/Paper-after2017.10.30")
+
+library(lubridate)
+library(stringr)
+
+
+#
+solution <- function(x) {
+  sol1 <- x$typrep == "A"
+  sol2 <- substr(x$accper,6,7)=="12"
+  sol <- sol1&sol2
+  return(x[sol,])}
+
+
+
+## Heteroskedasticity-robust standard error calculation.
+summaryheter <- function(model) {
+  s <- summary(model)
+  X <- model.matrix(model)
+  u2 <- residuals(model)^2
+  XDX <- 0
+  ## Here one needs to calculate X'DX. But due to the fact that
+  ## D is huge (NxN), it is better to do it with a cycle.
+  for(i in 1:nrow(X)) {
+    XDX <- XDX + u2[i]*X[i,]%*%t(X[i,])
+  }
+  # inverse(X'X)
+  XX1 <- solve(t(X)%*%X)
+  # Variance calculation (Bread x meat x Bread)
+  varcovar <- XX1 %*% XDX %*% XX1
+  # degrees of freedom adjustment
+  dfc <- sqrt(nrow(X))/sqrt(nrow(X)-ncol(X))
+  # Standard errors of the coefficient estimates are the
+  # square roots of the diagonal elements
+  stdh <- dfc*sqrt(diag(varcovar))
+  t <- model$coefficients/stdh
+  p <- 2*pnorm(-abs(t))
+  results <- cbind(model$coefficients, stdh, t, p)
+  dimnames(results) <- dimnames(s$coefficients)
+  results
+}
+
+
+
+## Cluster-robust standard error calculation.
+clus <- function(dat,fm, cluster){
+  attach(dat, warn.conflicts = F)
+  library(sandwich)
+  library(lmtest)
+  M <- length(unique(cluster))
+  N <- length(cluster)
+  K <- fm$rank
+  dfc <- (M/(M-1))*((N-1)/(N-K))
+  uj  <- apply(estfun(fm),2, function(x) tapply(x, cluster, sum));
+  vcovCL <- dfc*sandwich(fm, meat=crossprod(uj)/N)
+  coeftest(fm, vcovCL) }
+#
+
+
+
+
+#CSR文件,2009-2015
+
+csrcolname <- c("stkcd","company","requireddiscloser","csr")
+csrcolclass <- c("integer","factor","factor","numeric")
+csr09 <- read.csv("./Data/CSR/CSR09.csv",col.names=csrcolname,colClasses=csrcolclass)
+csr10 <- read.csv("./Data/CSR/CSR10.csv",col.names=csrcolname,colClasses=csrcolclass)
+csr11 <- read.csv("./Data/CSR/CSR11.csv",col.names=csrcolname,colClasses=csrcolclass)
+csr12 <- read.csv("./Data/CSR/CSR12.csv",col.names=csrcolname,colClasses=csrcolclass)
+csr13 <- read.csv("./Data/CSR/CSR13.csv",col.names=csrcolname,colClasses=csrcolclass)
+csr14 <- read.csv("./Data/CSR/CSR14.csv",col.names=csrcolname,colClasses=csrcolclass)
+csr15 <- read.csv("./Data/CSR/CSR15.csv",col.names=csrcolname,colClasses=csrcolclass)
+
+#创建日期Accper列
+csr09$accper <- "2008-12-31"
+csr10$accper <- "2009-12-31"
+csr11$accper <- "2010-12-31"
+csr12$accper <- "2011-12-31"
+csr13$accper <- "2012-12-31"
+csr14$accper <- "2013-12-31"
+csr15$accper <- "2014-12-31"
+#纵向合并
+csr <- do.call(rbind,list(csr09,csr10,csr11,csr12,csr13,csr14,csr15))
+#将日期改为DATE形式
+csr$accper <- ymd(csr$accper)
+csr$requireddiscloser <- factor(ifelse(csr$requireddiscloser=="自愿",1,0))
+
+
+
+
+
+#growth
+growth <- read.csv("./Data/growth.csv",stringsAsFactors = F)
+colnames(growth) <- tolower(colnames(growth))
+growth$accper <- ymd(growth$accper)
+growth <- solution(growth)
+names(growth)[4] <- "growth"
+growth <- growth[,-3]
+
+
+
+#operating cash flow ratio
+ocfr <- read.csv("./Data/ocfr.csv",stringsAsFactors = F)
+colnames(ocfr) <- tolower(colnames(ocfr))
+ocfr$accper <- ymd(ocfr$accper)
+ocfr <- solution(ocfr)
+names(ocfr)[4] <- "ocfr"
+ocfr <- ocfr[,-3]
+
+
+
+#asset\liability,size, 1990-2016
+asset <- read.csv("./Data/asset.csv",stringsAsFactors = F)
+colnames(asset) <- tolower(colnames(asset))
+asset$accper <- ymd(asset$accper)
+names(asset)[3] <- "asset"
+names(asset)[4] <- "liability"
+names(asset)[5] <- "capitalexp"
+asset$size <- log(asset$asset)
+asset$lev <- asset$liability/asset$asset
+asset$capxr <- asset$capitalexp/asset$asset
+levsizecap <- asset[,c(1,2,6,7,8)]
+
+
+
+
+#equitynature, 2003-2015
+equitynature <- read.csv("./Data/equitynature.csv",stringsAsFactors = F)
+colnames(equitynature) <- tolower(colnames(equitynature))
+colnames(equitynature)[1] <- "stkcd"
+colnames(equitynature)[3] <- "accper"
+equitynature$accper <- ymd(equitynature$accper)
+equitynature$soe <- factor(ifelse(str_detect(equitynature$equitynature,"国"),1,0))
+equitynature$foreign  <- factor(ifelse(str_detect(equitynature$equitynature,"外"),1,0))
+equitynatureid <- equitynature[,c(1,3,8,18,19)]
+
+
+
+
+#firminfo
+firminfo <- read.csv("./Data/firminfo.csv",stringsAsFactors = F)
+colnames(firminfo) <- tolower(colnames(firminfo))
+colnames(firminfo)[1] <- "stkcd"
+#选出2006年以后上市的企业
+firm <- firminfo[ymd(firminfo$listdt) < "2006-1-1",]
+#股票市场stockmarket
+firm$stockmarket <- factor(ifelse(firm$listexg==1,1,0))
+#樊纲市场化指数marketization
+marketization <- read.csv("./Data/marketization.csv",stringsAsFactors = F)
+firm$marketization <- sapply(firm$regplc,function(x) {
+  wh <- str_detect(x,marketization$region)
+  return(sum(marketization$marketization*wh))})
+#stockmarket,marketization
+market <- firm[firm$marketization > 0,c(1,3,4,12,24,25)]
+
+
+
+
+
+
+
+
+#totalsales, 1991-2016
+totalsales <- read.csv("./Data/totalsales.csv",stringsAsFactors = F)
+colnames(totalsales) <- tolower(colnames(totalsales))
+colnames(totalsales)[4] <- "totalsales"
+totalsales <- solution(totalsales)
+totalsales$accper <- ymd(totalsales$accper)
+
+#R&D, 2007-2014
+RD <- read.csv("./Data/R&D.csv",stringsAsFactors = F)
+colnames(RD) <- tolower(colnames(RD))
+RD$accper <- ymd(RD$accper)
+research <- RD[RD$typrep==1 & RD$fn02302=="合计",]
+research <- research[,c(1,2,5)]
+colnames(research)[3] <- "research"
+researchsales <- merge(research,totalsales,all.y=T)
+researchsales$rd <- with(researchsales,as.numeric(research)/as.numeric(totalsales))
+researchsales$rd[is.na(researchsales$rd)] <- 0
+
+
+
+
+#TobinQ,industry,q1,q2,q3,q4,r&d,hhi, 1990-2017
+TobinQ <- read.csv("./Data/TobinQ.csv",stringsAsFactors = F)
+colnames(TobinQ) <- tolower(colnames(TobinQ))
+TobinQ$accper <- ymd(TobinQ$accper)
+tobinq <- TobinQ[substr(TobinQ$accper,6,7)=="12" 
+                 & substr(TobinQ$accper,0,4) > 2007 
+                 & substr(TobinQ$accper,0,4) < 2017,]
+
+tobinq$industry <- factor(substr(tobinq$indcd,0,1))
+tobinq$accperindus <- paste0(tobinq$accper,tobinq$industry)
+tobinq$q1 <- with(tobinq,f100901a/sapply(accperindus,function(x){
+  indus <- tobinq[tobinq$accperindus==x,]
+  return(median(indus$f100901a,na.rm=T))
+}))
+tobinq$q2 <- with(tobinq,f100902a/sapply(accperindus,function(x){
+  indus <- tobinq[tobinq$accperindus==x,]
+  return(median(indus$f100902a,na.rm=T))
+}))
+tobinq$q3 <- with(tobinq,f100903a/sapply(accperindus,function(x){
+  indus <- tobinq[tobinq$accperindus==x,]
+  return(median(indus$f100903a,na.rm=T))
+}))
+tobinq$q4 <- with(tobinq,f100904a/sapply(accperindus,function(x){
+  indus <- tobinq[tobinq$accperindus==x,]
+  return(median(indus$f100904a,na.rm=T))
+}))
+
+tobinqrd <- merge(tobinq,researchsales)
+tobinqrd$hhi <- sapply(tobinqrd$accperindus,function(x){
+  indus <- tobinqrd[tobinqrd$accperindus==x,]
+  s <- c(0)
+  for(i in 1:length(indus$stkcd)){
+    s[i] <- indus$totalsales[i]/sum(indus$totalsales,na.rm=T)
+    return(sum(s^2,na.rm=T))}})
+tobinqrdhhi <- tobinqrd[,c(1,2,8,10:13,17,18)]
+#
+
+
+
+#ROA,risk, 1990-2017
+ROA <- read.csv("./Data/ROA.csv",stringsAsFactors = F)
+colnames(ROA) <- tolower(colnames(ROA))
+ROA <- ROA[ROA$typrep=="A",]
+ROA$accper <- ymd(ROA$accper)
+roa <- ROA[substr(ROA$accper,0,4) > 2000 & substr(ROA$accper,0,4) < 2017,]
+
+
+roa$industry <- factor(substr(roa$indcd,0,1))
+roa$accperindus <- paste0(roa$accper,roa$industry)
+roa$roa1 <- with(roa,f050201b-sapply(accperindus,function(x){
+  indus <- roa[roa$accperindus==x,]
+  return(mean(indus$f050201b,na.rm=T))}))
+roa$roa2 <- with(roa,f050202b-sapply(accperindus,function(x){
+  indus <- roa[roa$accperindus==x,]
+  return(mean(indus$f050202b,na.rm=T))}))
+roa$roa3 <- with(roa,f050203b-sapply(accperindus,function(x){
+  indus <- roa[roa$accperindus==x,]
+  return(mean(indus$f050203b,na.rm=T))}))
+roa$roa4 <- with(roa,f050204c-sapply(accperindus,function(x){
+  indus <- roa[roa$accperindus==x,]
+  return(mean(indus$f050204c,na.rm=T))}))
+adjroa <- roa[substr(roa$accper,6,7)=="12",c(1,2,11:14)]
+
+
+roa$stkcdaccp <- paste0(roa$stkcd,substr(roa$accper,0,4))
+roa$stkcdaccp <- as.numeric(roa$stkcdaccp)
+roa$risk1 <- sapply(roa$stkcdaccp,function(x){
+  indus <- roa[roa$stkcdaccp<=x & roa$stkcdaccp > (x-5),]
+  return(sd(indus$roa1,na.rm=T))})
+roa$risk2 <- sapply(roa$stkcdaccp,function(x){
+  indus <- roa[roa$stkcdaccp==x & roa$stkcdaccp > (x-5),]
+  return(sd(indus$roa2,na.rm=T))})
+roa$risk3 <- sapply(roa$stkcdaccp,function(x){
+  indus <- roa[roa$stkcdaccp==x & roa$stkcdaccp > (x-5),]
+  return(sd(indus$roa3,na.rm=T))})
+roa$risk4 <- sapply(roa$stkcdaccp,function(x){
+  indus <- roa[roa$stkcdaccp==x & roa$stkcdaccp > (x-5),]
+  return(sd(indus$roa4,na.rm=T))})
+risk <- roa[substr(roa$accper,6,7)=="12",c(1,2,16:19)]
+#将risk的时间滞后一期使其对应上其他变量
+#risk$accper <- ymd(paste0(as.numeric(substr(risk$accper,1,4))-1,"/12/31"))
+
+
+
+#BETA
+beta <- read.csv("./Data/BETA.csv",stringsAsFactors = F)
+colnames(beta) <- tolower(colnames(beta))
+colnames(beta)[2] <- "accper"
+#将beta的时间滞后一期使其对应上其他变量
+beta$accper <- ymd(paste0(beta$accper,"/12/31"))
+
+
+
+
+
+
+#totalstock, 2003-2016
+totalstock <- read.csv("./Data/totalstock.csv",stringsAsFactors = F)
+colnames(totalstock) <- tolower(colnames(totalstock))
+colnames(totalstock)[2] <- "accper"
+totalstock$accper <- ymd(totalstock$accper)
+totalstock <- totalstock[substr(totalstock$accper,6,7)=="12",]
+
+#TMT_Position,tenure, 2005-2014
+tmtposition <- read.csv("./Data/TMT_Position.csv",stringsAsFactors = F)
+colnames(tmtposition) <- tolower(colnames(tmtposition))
+colnames(tmtposition)[2] <- "accper"
+tmtposition$accper <- ymd(tmtposition$accper)
+tmtposition$stkcdaccper <- paste0(tmtposition$stkcd,substr(tmtposition$accper,0,4))
+
+
+#ceoname\indepenboard\boardshare
+cginfo <- read.csv("./Data/cginfo.csv",stringsAsFactors = F)
+cginfo$interdepenboard <- with(cginfo,1-as.numeric(Y1101b)/as.numeric(Y1101a))
+ceoname <- cginfo[,c(1,2,10,12,16,32)]
+colnames(ceoname) <- tolower(colnames(ceoname))
+ceoname$stkcd <- as.numeric(ceoname$stkcd)
+ceoname <- rbind(subset(ceoname,stkcd <= 999),
+                 subset(ceoname,stkcd < 601000 & stkcd>= 600000))
+colnames(ceoname)[2] <- "accper"
+ceoname$accper <- ymd(ceoname$accper)
+ceoname <- ceoname[substr(ceoname$accper,6,7)=="12",]
+colnames(ceoname)[3] <- "name"
+colnames(ceoname)[4] <- "boardsize"
+colnames(ceoname)[5] <- "board"
+
+
+#TMT_FigureInfo,gender,age,isduality,totalsalary,sharend, 2005-2014
+tmtfigureinfo <- read.csv("./Data/TMT_FigureInfo.csv",stringsAsFactors = F)
+colnames(tmtfigureinfo) <- tolower(colnames(tmtfigureinfo))
+colnames(tmtfigureinfo)[2] <- "accper"
+tmtfigureinfo$accper <- ymd(tmtfigureinfo$accper)
+tmtfigureinfo$stkcdaccper <- paste0(tmtfigureinfo$stkcd,substr(tmtfigureinfo$accper,0,4))
+tmtfigureinfo$totalsalary <- as.numeric(tmtfigureinfo$totalsalary)
+tmtfigureinfo$totalsalary[is.na(tmtfigureinfo$totalsalary)] <- 0
+cg <- tmtfigureinfo[tmtfigureinfo$tmtp== 1|tmtfigureinfo$tmtp==3,]
+cg$gender <- factor(ifelse(cg$gender=="男",0,1))
+#选出沪深A股
+cg$stkcd <- as.numeric(cg$stkcd)
+cg1 <- rbind(subset(cg,stkcd <= 999),
+             subset(cg,stkcd < 601000 & stkcd>= 600000))
+#cgshare
+cg1$sharend[is.na(as.numeric(cg1$sharend))] <- 0
+cg2 <- merge(cg1,totalstock)
+ceo <- merge(ceoname,cg2)
+ceo$ceoshare <- as.numeric(ceo$sharend)/as.numeric(ceo$nshrttl)
+ceo$board[is.na(as.numeric(ceo$board))] <- 0
+ceo$boardshare <- as.numeric(ceo$board)/as.numeric(ceo$nshrttl)
+#tenure
+ceopower <- merge(ceo,tmtposition)
+ceopower <- ceopower[!str_detect(ceopower$position,"师") 
+                     & !str_detect(ceopower$position,"事") 
+                     & !str_detect(ceopower$position,"董") 
+                     & !str_detect(ceopower$position,"委") 
+                     & !str_detect(ceopower$position,"工") 
+                     & !str_detect(ceopower$position,"监") 
+                     & !str_detect(ceopower$position,"书")
+                     & !str_detect(ceopower$position,"副")
+                     & !str_detect(ceopower$position,"党")
+                     & !str_detect(ceopower$position,"财")
+                     &  ceopower$servicestatus==1,]
+ceopower$isduality<- factor(ceopower$isduality)
+ceopower$compenratio <- sapply(ceopower$stkcdaccper,function(x){
+  eachunit <- tmtfigureinfo[tmtfigureinfo$stkcdaccper==x,] 
+  i <- which(ceopower$stkcdaccper==x)
+  m <- ceopower$totalsalary[i]
+  j <- max(eachunit$totalsalary[which(eachunit$totalsalary < m)])
+  return(unique(m/j))})
+ceopower$expertback <- str_count(ceopower$funback,",")+1
+ceopower$positionnum <- ifelse(is.na(as.numeric(ceopower$othercotype)),1,str_count(ceopower$otherco,",")+2)
+
+ceopower2 <- ceopower[,c(1,2,8:10,20,32,33,36,37,42,44:46)]
+#ceopower2$accper <- ymd(paste0(as.numeric(substr(ceopower2$accper,1,4))-1,"/12/31"))
+
+
+
+
+#reta, 1990-2016
+reta <- read.csv("./Data/reta.csv",stringsAsFactors = F)
+colnames(reta) <- tolower(colnames(reta))
+reta$accper <- ymd(reta$accper)
+reta <- reta[reta$typrep=="A" & substr(reta$accper,6,7)=="12",]
+colnames(reta)[4] <- "intangibleratio"
+#colnames(reta)[5] <- "tangibleratio"
+#colnames(reta)[6] <- "equityratio"
+colnames(reta)[7] <- "reta"
+reta <- reta[,-c(3,5,6)]
+
+
+
+
+
+#社会捐赠CSRR_BasicInfo
+socialdonation <- read.csv("./Data/CSRR_BasicInfo.csv",stringsAsFactors = F)
+colnames(socialdonation) <- tolower(colnames(socialdonation))
+colnames(socialdonation)[1] <- "stkcd"
+donation <- socialdonation[,c(1,2,9)]
+donation$accper <- donation$enddate
+donation$accper <- sapply(donation$accper,function(x){
+  substr(x,1,4) <- as.character(as.numeric(substr(x,1,4))-1)
+  return(x)
+})
+donation$accper <- ymd(donation$accper)
+donation2 <- donation[,c(1,3,4)]
+
+
+
+
+#合并变量
+a1 <- merge(levsizecap,market)
+#计算企业年龄,as.yearmon可以计算两个日期之间的年份
+library(zoo)
+a1$firmage <- with(a1,as.yearmon(accper)-as.yearmon(ymd(estbdt)))
+#除去金融行业
+a2 <- subset(a1,indcd>1)
+#除去ST企业
+a3 <- a2[!str_detect(a2$stknme,"ST"),]
+#ST没有！！
+
+
+
+b1 <- merge(ceopower2,csr[,-c(2)],all.x = T)
+#csr为NA标注为0
+b1$csr[is.na(b1$csr)] <- 0
+#是否披露csrdum因子虚拟变量
+b1$csrdum <- factor(ifelse(as.numeric(b1$csr)==0,0,1))
+b2 <- merge(b1,beta)
+b3 <- merge(b2,risk)
+b4 <- merge(b3,equitynatureid)
+b5 <- merge(b4,tobinqrdhhi)
+b6 <- merge(b5,adjroa)
+b7 <- merge(b6,growth)
+b8 <- merge(b7,ocfr)
+
+
+c1 <- merge(b8,a3)
+c2 <- c1[substr(c1$accper,0,4)!="2008",-c(43:45)]
+c2 <- c1[,-c(43:45)]
+
+#c2 <- merge(c1,donation2,all.x=T)
+#c2$donationamount[is.na(c2$donationamount)] <- 0
+#c2$donationdum <- factor(ifelse(c2$donationamount==0,0,1))
+
+#& c5$hhi < 1 & c5$debtr < 20 & c5$reta + 20 > 0
+#& c5$risk1 < 12 & c5$roa1 < 700
+#& c5$q1 < 100 & c5$q2 < 100 
+#& c5$q3 < 100 & c5$q4 < 70
+
+#将日期变成因子
+c2$accper <- factor(c2$accper)
+c2$requireddiscloser[is.na(c2$requireddiscloser)] <- 0
+c2$director_totco <- as.numeric(c2$director_totco)
+c5 <- na.omit(c2)
+
+#进行Winsorise处理，处理离群值
+library(robustHD)
+#c5$compenratio <- winsorize(c5$compenratio,probs = c(0.01, 0.99))
+c5$q1 <- winsorize(c5$q1,probs = c(0.01, 0.99))
+c5$q2 <- winsorize(c5$q2,probs = c(0.01, 0.99))
+c5$q3 <- winsorize(c5$q3,probs = c(0.01, 0.99))
+c5$q4 <- winsorize(c5$q4,probs = c(0.01, 0.99))
+c5$roa1 <- winsorize(c5$roa1,probs = c(0.01, 0.99))
+c5$roa2 <- winsorize(c5$roa2,probs = c(0.01, 0.99))
+c5$roa3 <- winsorize(c5$roa3,probs = c(0.01, 0.99))
+c5$roa4 <- winsorize(c5$roa4,probs = c(0.01, 0.99))
+#c5$growth <- winsorize(c5$growth,probs = c(0.01, 0.99))
+#c5$ocfr <- winsorize(c5$ocfr,probs = c(0.01, 0.99))
+#c5$lev <- winsorize(c5$lev,probs = c(0.01, 0.99))
+#c5$capxr <- winsorize(c5$capxr,probs = c(0.01, 0.99))
+c5$betaval <- winsorize(c5$betaval,probs = c(0.01, 0.99))
+c5$betavals <- winsorize(c5$betavals,probs = c(0.01, 0.99))
+c5$risk1 <- winsorize(c5$risk1,probs = c(0.01, 0.99))
+c5$risk2 <- winsorize(c5$risk2,probs = c(0.01, 0.99))
+c5$risk3 <- winsorize(c5$risk3,probs = c(0.01, 0.99))
+c5$risk4 <- winsorize(c5$risk4,probs = c(0.01, 0.99))
+c6 <- na.omit(c5)
+
+
+
+#ceo power四个维度分开回归
+#isduality indepenboard compenratio
+#ceoshare 
+#positionnum expertback tenure
+#director_listco
+
+library(lmtest)
+glmreg <- glm(csrdum ~ industry+accper+firmage+size+gender+age
+              +lev+growth+roa1+q1+marketization+stockmarket
+              +ocfr+capxr+rd+hhi+risk2+toptenholdersrate
+              +isduality+interdepenboard+compenratio
+              +ceoshare+director_listco
+              +positionnum+expertback+tenure, 
+              family=binomial(link="logit"), data=c6)
+glmreg <- glm(csrdum ~ industry+accper+firmage+size+gender+age
+              +lev+roa1+q1+marketization
+              +isduality
+              +ceoshare
+              +tenure
+              +director_totco, 
+              family=binomial(link="logit"), data=c6)
+summary(glmreg)
+clus(c6,glmreg,c6$stkcd)
+#Calculate inverse Mills ratio
+c6$IMR <- dnorm(glmreg$linear.predictors)/pnorm(glmreg$linear.predictors)
+#c6$IMR <- dnorm(glmreg$linear.predictors)/pnorm(glmreg$linear.predictors)
+
+
+# Outcome equation correcting for selection
+c6dum <- c6[c6$csrdum==1,]
+#+indepenboard+compenratio
+#+director_totco+positionnum+expertback
+#+growth+ocfr+capxr+toptenholdersrate+stockmarket+risk2
+
+
+olsreg <- lm(csr ~ industry+accper+firmage+size+gender+age
+             +lev+roa1+q1+marketization
+             +isduality
+             +ceoshare
+             +tenure
+             +director_totco
+             +IMR,
+             data=c6dum)
+
+summary(olsreg)
+clus(c6dum,olsreg,c6dum$stkcd)
+#
+#olsreg <- lm(donationamount ~ industry+accper+roa1+q4+firmage+size
+#             +marketization+gender+age+IMR
+#             +isduality+ceoshare+expertback+director_listco,
+#             data=c5donationdum)
+
+#summary(olsreg)
+#clus(c5dum,olsreg,c5dum$stkcd)
+#clus(c5donationdum,olsreg,c5donationdum$stkcd)
+
+
+
+#和论文中一样多个模型的结果处于同一张表格中
+
+#控制变量
+olsreg1 <- lm(csr ~ industry+accper+firmage+size+gender+age
+              +lev+roa1+q1+marketization+IMR,
+              data=c6dum)
+result1 <- clus(c6dum,olsreg1,c6dum$stkcd)
+#自变量1
+olsreg2 <- lm(csr ~ industry+accper+firmage+size+gender+age
+              +lev+roa1+q1+marketization
+              +isduality
+              +IMR,
+              data=c6dum)
+result2 <- clus(c6dum,olsreg2,c6dum$stkcd)
+#自变量2
+olsreg3 <- lm(csr ~ industry+accper+firmage+size+gender+age
+              +lev+roa1+q1+marketization
+              +ceoshare
+              +IMR,
+              data=c6dum)
+result3 <- clus(c6dum,olsreg3,c6dum$stkcd)
+#自变量3
+olsreg4 <- lm(csr ~ industry+accper+firmage+size+gender+age
+              +lev+roa1+q1+marketization
+              +tenure
+              +IMR,
+              data=c6dum)
+result4 <- clus(c6dum,olsreg4,c6dum$stkcd)
+#自变量4
+olsreg5 <- lm(csr ~ industry+accper+firmage+size+gender+age
+              +lev+roa1+q1+marketization
+              +director_totco
+              +IMR,
+              data=c6dum)
+result5 <- clus(c6dum,olsreg5,c6dum$stkcd)
+#自变量
+olsreg6 <- lm(csr ~ industry+accper+firmage+size+gender+age
+             +lev+roa1+q1+marketization
+             +isduality
+             +ceoshare
+             +tenure
+             +director_totco
+             +IMR,
+             data=c6dum)
+
+result6 <- clus(c6dum,olsreg6,c6dum$stkcd)
+
+
+
+library(stargazer)
+
+stargazer(result1,result2,result3,result4,result5,result6, type = "text")
+stargazer(olsreg1,olsreg2,olsreg3,olsreg4,olsreg5,olsreg6, type = "text")
+
+#number of firms
+nlevels(factor(c5dum$stkcd))
+
+
+
+
+#相关性检验
+c7 <- c6[c6$csrdum==1,]
+#c7$csrdum <- as.numeric(c7$csrdum)
+c7cor <- c7[,c(45,40,4,5,41,34,28,44,6,9,11,7,16)]
+c7cor$isduality <- as.numeric(c7cor$isduality)
+c7cor$gender <- as.numeric(c7cor$gender)
+
+library("Hmisc")
+#带p值的相关系数矩阵
+corc7 <- rcorr(as.matrix(c7cor))
+#只要系数
+corc7$r
+#只要p-values
+corc7$P
+#均值与方差
+sapply(c7cor,mean)
+sapply(c7cor,sd)
+#带星星的相关系数矩阵
+corstarsl(c7cor)
+
+
+#改进的带星号的函数
+corstarsl <- function(x){ 
+  require(Hmisc) 
+  x <- as.matrix(x) 
+  R <- rcorr(x)$r 
+  p <- rcorr(x)$P 
+  
+  ## define notions for significance levels; spacing is important.
+  mystars <- ifelse(p < .001, "***", ifelse(p < .01, "** ", ifelse(p < .05, "* ", " ")))
+  
+  ## trunctuate the matrix that holds the correlations to two decimal
+  R <- format(round(cbind(rep(-1.11, ncol(x)), R), 2))[,-1] 
+  
+  ## build a new matrix that includes the correlations with their apropriate stars 
+  Rnew <- matrix(paste(R, mystars, sep=""), ncol=ncol(x)) 
+  diag(Rnew) <- paste(diag(R), " ", sep="") 
+  rownames(Rnew) <- colnames(x) 
+  colnames(Rnew) <- paste(colnames(x), "", sep="") 
+  
+  ## remove upper triangle
+  Rnew <- as.matrix(Rnew)
+  Rnew[upper.tri(Rnew, diag = TRUE)] <- ""
+  Rnew <- as.data.frame(Rnew) 
+  
+  ## remove last column and return the matrix (which is now a data frame)
+  Rnew <- cbind(Rnew[1:length(Rnew)-1])
+  return(Rnew) 
+}
+#
+
+
+#查看共线性VIF
+library(car)
+vif(olsreg6)
